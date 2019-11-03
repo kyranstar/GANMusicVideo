@@ -4,7 +4,7 @@ Created on Fri Nov  1 14:40:48 2019
 
 @author: Owner
 """
-import os
+import os, os.path
 import requests
 from apiclient.discovery import build
 import curses
@@ -390,16 +390,23 @@ gis = FetchResizeSave()
 
 num_per_query = 10
 num_images_per_term = 1000
-search_terms = ['mountain painting', 'abstract painting', 'impressionist lake', 'moon water painting']
+search_terms = ['impressionist self portrait', 'abstract expressionism painting', 'pointilism art']
+num_already_searched = []
+for term in search_terms:
+    term = os.getcwd() + '/data/' + term.replace(' ', '_')
+    if os.path.exists(term):   
+        num_already_searched.append(len([name for name in os.listdir(term)]))
+    else:
+        num_already_searched.append(0)
 
-for _query in search_terms:
+for _query, num_searched in zip(search_terms, num_already_searched):
+    print(f'Searching {_query} [{num_searched} - {num_images_per_term}]...')
     for start in range(1, num_images_per_term, num_per_query):
-
         #define search params:
         _search_params = {
             'q': _query,
             'num': num_per_query,
-            'start': start,
+            'start': start + num_searched,
             #'safe': 'off', #high|medium|off
             #'fileType': 'jpg', #jpg|gif|png
             #'imgType': 'photo', #clipart|face|lineart|news|photo
@@ -415,7 +422,8 @@ for _query in search_terms:
             gis.search(search_params=_search_params)
             for image in gis.results():
                 try:
-                    image.download(f'data/{_query}')
+                    img_dir = _query.replace(' ', "_")
+                    image.download(f'data/{img_dir}')
                     image.resize(500, 500)
                 except Exception as e:
                     print(e)
