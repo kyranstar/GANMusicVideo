@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import numpy as np
 import os
 import PIL
@@ -106,7 +104,7 @@ def kACGANGenerator(n_samples, numClasses=0, labels, noise=None, dim=DIM, bn=Tru
     #model.add(tf.keras.layers.BatchNormalization())
     if bn:
         output = Batchnorm('Generator.BN1', [0,2,3], output)
-        
+
     condition = lib.ops.linear.Linear('Generator.cond1', numClasses, 8*4*4*dim*2, labels,biases=False)
     condition = tf.reshape(condition, [-1, 8*dim*2, 4, 4])
     output = pixcnn_gated_nonlinearity('Generator.nl1', 8*dim, output[:,::2], output[:,1::2], condition[:,::2], condition[:,1::2])
