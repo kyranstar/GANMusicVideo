@@ -14,9 +14,9 @@ from tqdm import tqdm
 import if_to_latent_svm
 
 def convert_array_to_image(array):
-    array = tf.reshape(array, [28, 28])
+    array = tf.reshape(array, [128, 128, 3])
     """Converts a numpy array to a PIL Image and undoes any rescaling."""
-    img = PIL.Image.fromarray(np.uint8((array + 1.0) / 2.0 * 255), mode='L')
+    img = PIL.Image.fromarray(np.uint8((array + 1.0) / 2.0 * 255), mode='RGB')
     return img
 
 def generate_and_save_images(model, epoch, test_input):
@@ -36,7 +36,7 @@ def generate_and_save_images(model, epoch, test_input):
     plt.savefig("images/" + 'sample{:04d}.png'.format(epoch))
     plt.clf()
 
-def process_and_save_images(start_latent, mf, mf_to_if_model, if_to_latent_model, if_to_image_model):
+def process_and_save_images(start_latent, mf, mf_to_if_model, inverter, generator, svm_train_data, img_feats_list, Z_DIM):
     """
     The main algorithm for the entire project. Takes in music features for a given song,
     generates image features using the given transformation, transforms this to
@@ -46,20 +46,43 @@ def process_and_save_images(start_latent, mf, mf_to_if_model, if_to_latent_model
     mf: Music feature samples. For 30 fps footage, have 30 samples per second.
     mf_to_if_model:
     if_to_latent_model:
-    if_to_image_model:
+    generator:
     """
     print("Converting music features to image features...")
     image_features = mf_to_if_model(mf)
+    print('Calculating latent representations of svm training data...')
+    svm_latent_train = np.array([inverter(tf.reshape(img, (1, 128, 128, 3)), training=False) for (img, lab) in tqdm(svm_train_data)]).reshape(-1, Z_DIM)
+    print("Calculating unit vectors in latent space...")
+    latent_labels =  {feat : np.array([lab[feat] for (img, lab) in svm_train_data]) for feat in img_feats_list}
+    unit_vectors = if_to_latent_svm.get_image_unit_vectors(svm_latent_train, latent_labels, generator, inverter)
     print("Converting image features to latent points...")
-    latent_points = if_to_latent_model(image_features, mf.shape[0], start_latent)
+    latent_points = if_to_latent_model(image_features, mf.shape[0], start_latent, unit_vectors, Z_DIM)
     print("Generating final images...")
-    images = if_to_image_model(latent_points, training=False)
+    images = generator(latent_points, training=False)
 
     for i in range(images.shape[0]):
         img = images[i, :]
         filename = "renders/" + 'reconstruction{}.jpg'.format(i)
         convert_array_to_image(img).save(filename, "JPEG")
 
+def if_to_latent_model(image_features, size, start_latent, unit_vectors, Z_DIM):
+    """
+    Converts image features to the latent space using the svm unit vectors
+    if: {feature_name: np array of features}
+    size: the number of resulting latent space points
+    start_latent: the first latent point in the series
+    """
+    sum = np.zeros((size, Z_DIM))
+    for (feature_name, feature_strength) in image_features.items():
+        feat_vec = unit_vectors[feature_name]
+        sum += np.multiply(feat_vec.transpose(), feature_strength).transpose()
+    #Generate walks along svm normal
+    #feature_unit = unit_vectors['ave_brightness']
+    #distances = np.arange(0.0, 16, 0.01)
+    #imgs = [(img_0 + sum[i, :]) for i in range(size)]
+    return np.add(sum, np.full((size, Z_DIM), fill_value=start_latent))
+
+"""
 Z_DIM = 64
 generator_dir = 'models/generator.h5'
 inverter_dir = 'models/inverter.h5'
@@ -85,30 +108,8 @@ def ave_brightness(img):
 print('Calculating ave_brightness...')
 
 image_features['ave_brightness'] = np.array([ave_brightness(img) for img in tqdm(train_images)])
-print('Calculating latent representations...')
-latent_points = np.array([inverter(img, training=False) for img in tqdm(train_images)]).reshape(-1, Z_DIM)
-unit_vectors = if_to_latent_svm.get_image_unit_vectors(latent_points, image_features, generator, inverter)
+
 
 mf = np.sin(np.linspace(-np.pi, np.pi, 30*5))
-def mf_to_if_model(mf):
-    im_feats = {'ave_brightness': mf*8}
-    return im_feats
-
-def if_to_latent_model(image_features, size, start_latent):
-    """
-    Converts image features to the latent space using the svm unit vectors
-    if: {feature_name: np array of features}
-    size: the number of resulting latent space points
-    start_latent: the first latent point in the series
-    """
-    sum = np.zeros((size, Z_DIM))
-    for (feature_name, feature_strength) in image_features.items():
-        feat_vec = unit_vectors[feature_name]
-        sum += np.multiply(feat_vec.transpose(), feature_strength).transpose()
-    #Generate walks along svm normal
-    #feature_unit = unit_vectors['ave_brightness']
-    #distances = np.arange(0.0, 16, 0.01)
-    #imgs = [(img_0 + sum[i, :]) for i in range(size)]
-    return np.add(sum, np.full((mf.shape[0], Z_DIM), fill_value=start_latent))
-
-process_and_save_images(latent_points[10], mf, mf_to_if_model, if_to_latent_model, generator)
+process_and_save_images(latent_points[10], mf, mf_to_if_model, if_to_latent_model, inverter, generator, train_images)
+"""

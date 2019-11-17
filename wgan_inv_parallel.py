@@ -1,6 +1,5 @@
-import sys, os
-os.environ["CUDA_VISIBLE_DEVICES"]="6"
 import numpy as np
+import os
 import PIL
 import time
 from IPython import display
@@ -18,40 +17,6 @@ import data_loader
 
 print(tf.__version__)
 
-"""### Start Tensorboard Logging
-"""
-train_log_dir = 'summaries/mnist_gan/train'
-test_log_dir = 'summaries/mnist_gan/test'
-train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-test_summary_writer = tf.summary.create_file_writer(test_log_dir)
-
-"""### Load the dataset
-We are going to use the MNIST dataset to train the generator and the discriminator. The generator will generate handwritten digits resembling the MNIST data.
-"""
-
-
-# (train_images, train_labels), (_, _) = tf.keras.datasets.mnist.load_data()
-dataset = data_loader.load_data()
-# print(train_images[0])
-
-
-BATCH_SIZE = 1024
-NUM_UPDATES_PER_BATCH = 4
-
-OUTPUT_SIZE = 128
-# The size of the z space - the input space to the generator
-Z_DIM = 128
-# The size of the latent space in all 3 models in the GAN
-LATENT_DIM = 64
-
-DIVERGENCE_LAMBDA = 0.1
-GRAD_PENALTY_FACTOR = 10.0
-
-"""### Use tf.data to create batches and shuffle the dataset"""
-
-num_test_images = 8
-test_dataset = dataset.take(num_test_images).cache()
-train_dataset = dataset.skip(num_test_images).batch(BATCH_SIZE)
 
 """## Create the models
 We will use tf.keras [Sequential API](https://www.tensorflow.org/guide/keras#sequential_model) to define the generator and discriminator models.
@@ -151,16 +116,12 @@ def make_inverter_model():
     model.summary()
     return model
 
-generator = make_generator_model()
-discriminator = make_discriminator_model()
-inverter = make_inverter_model()
-
 """## Define the loss functions and the optimizer
 Let's define the loss functions and the optimizers for the generator and the discriminator.
 ### Generator loss
 The generator loss is a sigmoid cross entropy loss of the generated images and an array of ones, since the generator is trying to generate fake images that resemble the real images.
 """
-@tf.function
+
 def generator_loss(generated_output, gradient_penalty):
     return tf.compat.v1.losses.sigmoid_cross_entropy(tf.ones_like(generated_output), generated_output) + gradient_penalty
 
@@ -170,7 +131,7 @@ The discriminator loss function takes two inputs: real images, and generated ima
 2. Calculate generated_loss which is a sigmoid cross entropy loss of the generated images and an array of zeros (since these are the fake images).
 3. Calculate the total_loss as the sum of real_loss and generated_loss.
 """
-@tf.function
+
 def discriminator_loss(real_output, generated_output):
     # [1,1,...,1] with real output since it is true and we want our generated examples to look like it
     real_loss = tf.compat.v1.losses.sigmoid_cross_entropy(
@@ -187,31 +148,64 @@ def discriminator_loss(real_output, generated_output):
 """### Inverter Loss
 The inverter loss takes four inputs: noise z, invert(generate(z)), image x, and generate(invert(x)).
 """
-@tf.function
 def inverter_loss(real_noise, rec_noise, real_image, rec_image):
     divergence = DIVERGENCE_LAMBDA * tf.reduce_mean(tf.square(real_noise - rec_noise))
     reconstruction_err = tf.reduce_mean(tf.square(real_image - rec_image))
 
     return divergence + reconstruction_err
 
-"""The discriminator and the generator optimizers are different since we will train two networks separately."""
+### Start Tensorboard Logging
+train_log_dir = 'summaries/mnist_gan/train'
+test_log_dir = 'summaries/mnist_gan/test'
+train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+test_summary_writer = tf.summary.create_file_writer(test_log_dir)
 
-generator_optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
-discriminator_optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
-inverter_optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
+"""### Load the dataset
+We are going to use the MNIST dataset to train the generator and the discriminator. The generator will generate handwritten digits resembling the MNIST data.
+"""
+# (train_images, train_labels), (_, _) = tf.keras.datasets.mnist.load_data()
+dataset = data_loader.load_data()
+# print(train_images[0])
+
+
+BATCH_SIZE = 1024
+NUM_UPDATES_PER_BATCH = 4
+
+OUTPUT_SIZE = 128
+# The size of the z space - the input space to the generator
+Z_DIM = 128
+# The size of the latent space in all 3 models in the GAN
+LATENT_DIM = 64
+
+DIVERGENCE_LAMBDA = 0.1
+GRAD_PENALTY_FACTOR = 10.0
+
+"""### Use tf.data to create batches and shuffle the dataset"""
+
+num_test_images = 8
+test_dataset = dataset.take(num_test_images).cache()
+train_dataset = dataset.skip(num_test_images).batch(BATCH_SIZE)
+
+
+strategy = tf.distribute.MirroredStrategy()
+with strategy.scope():
+    generator = make_generator_model()
+    discriminator = make_discriminator_model()
+    inverter = make_inverter_model()
+    """The discriminator and the generator optimizers are different since we will train two networks separately."""
+
+    generator_optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
+    discriminator_optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
+    inverter_optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
 
 """**Checkpoints (Object-based saving)**"""
 
-checkpoint_dir = './training_checkpoints_wgan'
-#checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+checkpoint_dir = './training_checkpoints_mnist'
+checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
 checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                  discriminator_optimizer=discriminator_optimizer,
-                                 inverter_optimizer=inverter_optimizer,
                                  generator=generator,
-                                 discriminator=discriminator,
-                                 inverter=inverter)
-manager = tf.train.CheckpointManager(
-    checkpoint, directory=checkpoint_dir, max_to_keep=2)
+                                 discriminator=discriminator)
 
 """## Set up GANs for Training
 Now it's time to put together the generator and discriminator to set up the Generative Adversarial Networks, as you see in the diagam at the beginning of the tutorial.
@@ -230,6 +224,7 @@ random_vector_for_generation = tf.random.normal([num_examples_to_generate,
 We start by iterating over the dataset. The generator is given a random vector as an input which is processed to  output an image looking like a handwritten digit. The discriminator is then shown the real MNIST images as well as the generated images.
 Next, we calculate the generator and the discriminator loss. Then, we calculate the gradients of loss with respect to both the generator and the discriminator variables.
 """
+
 
 @tf.function
 def train_step(images, epoch):
@@ -284,35 +279,45 @@ def train_step(images, epoch):
 """This model takes about ~30 seconds per epoch to train on a single Tesla K80 on Colab, as of October 2018.
 Eager execution can be slower than executing the equivalent graph as it can't benefit from whole-program optimizations on the graph, and also incurs overheads of interpreting Python code. By using [tf.contrib.eager.defun](https://www.tensorflow.org/api_docs/python/tf/contrib/eager/defun) to create graph functions, we get a ~20 secs/epoch performance boost (from ~50 secs/epoch down to ~30 secs/epoch). This way we get the best of both eager execution (easier for debugging) and graph mode (better performance).
 """
+
+
 def train(dataset, epochs):
     generate_and_save_images(generator, 1, random_vector_for_generation)
     print("Training")
     for epoch in range(epochs):
         start = time.time()
         print("Training {} iterations in epoch {}".format(130000/BATCH_SIZE, epoch))
+        def distributed_train_step(dataset_inputs, epoch):
+            losses = strategy.experimental_run_v2(train_step, args=(dataset_inputs, epoch))
+            return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses,
+                                   axis=None)
+
         for current_step, img_and_labels in tqdm(enumerate(dataset)):
             images = img_and_labels[0]
+            total_loss = 0.0
+            num_batches = 0
             for i in range(NUM_UPDATES_PER_BATCH):
-                train_step(images, current_step)
-            if current_step % 4 == 0:
-                print("Saving checkpoint...")
-                manager.save()
+                total_loss += distributed_train_step(images, current_step)
+                num_batches += 1
+            train_loss = total_loss / num_batches
+            print("Iteration loss: {}".format(train_loss))
+            # TODO Remove this:
+            if current_step % 2 == 0:
                 generate_and_save_images(generator,
                                          epoch + 1,
                                          random_vector_for_generation)
-                reconstruct_and_save_images(generator, inverter, epoch+1, test_dataset)
-        display.clear_output(wait=True)
 
-        # saving (checkpoint) the model every n epochs
-        #if (epoch + 1) % 4 == 0:
-        print("Saving checkpoint and models...")
-        manager.save()
-        generator.save('models/generator.h5')
-        inverter.save('models/inverter.h5')
+        display.clear_output(wait=True)
         generate_and_save_images(generator,
                                  epoch + 1,
                                  random_vector_for_generation)
         reconstruct_and_save_images(generator, inverter, epoch+1, test_dataset)
+
+        # saving (checkpoint) the model every n epochs
+        #if (epoch + 1) % 4 == 0:
+        checkpoint.save(file_prefix=checkpoint_prefix)
+        generator.save('models/generator.h5')
+        inverter.save('models/inverter.h5')
 
         print('Time taken for epoch {} is {} sec'.format(epoch + 1,
                                                          time.time()-start))
@@ -328,7 +333,10 @@ def train(dataset, epochs):
 
 
 """**Generate and save images**"""
+
+
 def generate_and_save_images(model, epoch, test_input):
+    #
     # make sure the training parameter is set to False because we
     # don't want to train the batchnorm layer when doing inference.
     predictions = model(test_input, training=False)
@@ -342,7 +350,7 @@ def generate_and_save_images(model, epoch, test_input):
         plt.axis('off')
 
     plt.savefig("images/" + 'sample_at_epoch_{:04d}.png'.format(epoch))
-    plt.close(fig)
+    plt.show()
     plt.clf()
 
 def reconstruct_and_save_images(generator, inverter, epoch, test_images):
@@ -365,7 +373,6 @@ def reconstruct_and_save_images(generator, inverter, epoch, test_images):
     plt.savefig("images/" + 'reconstruction_at_epoch_{:04d}.png'.format(epoch))
     #plt.show()
     plt.clf()
-    plt.close(fig)
 
 def convert_array_to_image(array):
     array = tf.reshape(array, [128, 128, 3])
@@ -381,11 +388,9 @@ At the beginning of the training, the generated images look like random noise. A
 
 if __name__ == "__main__":
     # restoring the latest checkpoint in checkpoint_dir
-    #if not tf.train.latest_checkpoint(checkpoint_dir) is None:
-    print("Current process PID: " + str(os.getpid()))
-    print("Restoring from", manager.latest_checkpoint)
-    checkpoint.restore(manager.latest_checkpoint)
-        #checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
+    if not tf.train.latest_checkpoint(checkpoint_dir) is None:
+        print("Restoring from", tf.train.latest_checkpoint(checkpoint_dir))
+        checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
 
     generator.save('models/generator.h5')
     inverter.save('models/inverter.h5')
@@ -396,4 +401,5 @@ if __name__ == "__main__":
         arch_file.write(inverter.to_json())
 
     print("Num epochs", EPOCHS)
-    train(train_dataset, EPOCHS)
+    dist_dataset = mirrored_strategy.experimental_distribute_dataset(train_dataset)
+    train(dist_dataset, EPOCHS)

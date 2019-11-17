@@ -4,6 +4,7 @@ from os import listdir
 from os.path import isfile, join
 import tensorflow as tf
 import numpy as np
+import random
 
 GENRE_OPTIONS = ['portrait', 'landscape', 'genre painting', 'abstract', 'religious painting', 'sketch and study', 'cityscape', 'figurative', 'illustration',
     'nude painting (nu)', 'still life', 'design', 'symbolic painting', 'sculpture', 'mythological painting', 'flower painting', 'self-portrait', 'animal painting', 'marina', 'installation']
@@ -24,7 +25,7 @@ def read_img(file_path, img_size):
     img = img * 2.0 - 1.0
     return tf.image.resize(img, [img_size, img_size])
 
-def get_features(json_dict):
+def get_features(json_dict, verbose=False):
     """
     """
     # divide years into quantiles
@@ -35,7 +36,7 @@ def get_features(json_dict):
             if style in STYLE_OPTIONS:
                 style_index = len(YEAR_QUANTILES) + 1 + len(GENRE_OPTIONS) + STYLE_OPTIONS.index(style)
                 feats[style_index] = 1
-            else:
+            elif verbose:
                 print("Style {} does not exist!".format(style))
     if not json_dict['genre'] is None:
         genres = [s.lower().strip() for s in json_dict['genre'].split(',')]
@@ -43,7 +44,7 @@ def get_features(json_dict):
             if genre in GENRE_OPTIONS:
                 genre_index = len(YEAR_QUANTILES) + 1 + GENRE_OPTIONS.index(genre)
                 feats[genre_index] = 1
-            else:
+            elif verbose:
                 print("Genre {} does not exist!".format(genre))
     year = json_dict['completitionYear']
     if year <= YEAR_QUANTILES[0]:
@@ -56,10 +57,12 @@ def get_features(json_dict):
         feats[3] = 1
     return feats
 
+def ave_brightness(img):
+    return 0 if tf.reduce_mean(img) < -0.03 else 1
 
     # Interesting keys: tags, genre, style, period, completitionYear, title,
 
-def load_data(image_folder='data/wikiart-saved/images/', meta_folder='data/wikiart-saved/meta/', img_size=128):
+def load_data(image_folder='data/wikiart-saved/images/', meta_folder='data/wikiart-saved/meta/', img_size=128, verbose=False):
     """
     Returns:
         tf.data.Dataset: gives (image, label) pairs, where the images are preprocessed and sized to img_size x img_size,
@@ -67,32 +70,57 @@ def load_data(image_folder='data/wikiart-saved/images/', meta_folder='data/wikia
     """
 
     # Load json files from data/wikiart-saved/meta/artistname.json
-    meta_files = [join(meta_folder, f) for f in listdir(meta_folder) if isfile(join(meta_folder, f))]
-    meta_files = meta_files[:10]
+
     def datapoint_gen():
+        meta_files = [join(meta_folder, f) for f in listdir(meta_folder) if isfile(join(meta_folder, f))]
+        # Precalculate features {meta_file: {contentId: features}}
+        feat_mapping = {}
         for meta_file_dir in meta_files:
-            print("Loading {}...".format(meta_file_dir))
+            feat_mapping[meta_file_dir] = {}
             with open(meta_file_dir, encoding='utf-8') as meta_file:
                 meta_json = json.load(meta_file)
                 for meta_entry in meta_json:
-                    # Get key year and contentId
                     artist_name = meta_entry.get('artistUrl')
                     year = meta_entry.get('completitionYear')
                     id = meta_entry.get('contentId')
                     if artist_name is None or year is None or id is None:
                         continue
-                    # Load image from data/wikiart-saved/images/year/contentId.jpg
-                    img_path = join(image_folder, artist_name, str(year), str(id) + '.jpg')
-                    if not isfile(img_path):
-                        print("Image {} does not exist.".format(img_path))
-                        continue
-                    try:
-                        img = read_img(img_path, img_size)
-                        feats = get_features(meta_entry)
-                    except Exception as e:
-                        print("EXCEPTION: " + str(e))
-                        continue
-                    yield img, feats
+                    feat_mapping[meta_file_dir][meta_entry['contentId']] = get_features(meta_entry)
+        if verbose:
+            print("Shuffling dataset...")
+        random.shuffle(meta_files)
+        for meta_file_dir in meta_files:
+            try:
+                if verbose:
+                    print("Loading {}...".format(meta_file_dir))
+                with open(meta_file_dir, encoding='utf-8') as meta_file:
+                    meta_json = json.load(meta_file)
+                    for meta_entry in meta_json:
+                        # Get key year and contentId
+                        artist_name = meta_entry.get('artistUrl')
+                        year = meta_entry.get('completitionYear')
+                        id = meta_entry.get('contentId')
+                        if artist_name is None or year is None or id is None:
+                            continue
+                        # Load image from data/wikiart-saved/images/year/contentId.jpg
+                        img_path = join(image_folder, artist_name, str(year), str(id) + '.jpg')
+                        if not isfile(img_path):
+                            if verbose:
+                                print("Image {} does not exist.".format(img_path))
+                            continue
+                        try:
+                            img = read_img(img_path, img_size)
+                            feats = np.append(feat_mapping[meta_file_dir][meta_entry['contentId']], np.array([ave_brightness(img)]))
+                        except Exception as e:
+                            if verbose:
+                                print("EXCEPTION: " + str(e))
+                            continue
+                        yield img, feats
+            except Exception as e:
+                if verbose:
+                    print("Exception: " + str(e))
+                continue
+
 
     #print("Preprocessing images...")
     #datagen = tf.keras.preprocessing.image.ImageDataGenerator(
@@ -100,7 +128,7 @@ def load_data(image_folder='data/wikiart-saved/images/', meta_folder='data/wikia
     #    featurewise_std_normalization=True)
     #datagen.fit(images)
     return tf.data.Dataset.from_generator(datapoint_gen,
-                                        (tf.float32, tf.int32))
+                                        (tf.float32, tf.int32)).prefetch(buffer_size=1500)
 
     # Preprocess images
 

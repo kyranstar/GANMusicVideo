@@ -18,6 +18,7 @@ def get_image_unit_vectors(latent_points, image_features, generator, inverter):
     """
     Gets unit vectors in latent space corresponding to image features
 
+    For each image_feature, there must be examples of both classes.
     Parameters:
         X: an image dataset
         Y: a dictionary where keys are names of image features and values are
@@ -28,7 +29,7 @@ def get_image_unit_vectors(latent_points, image_features, generator, inverter):
 
     # Fit a SVM for each image feature
     svms = {}
-    for (feature_name, feature_labels) in image_features.items():
+    for (feature_name, feature_labels) in tqdm(image_features.items()):
         print("Creating svm for feature {}...".format(feature_name))
         X = latent_points
         Y = feature_labels
@@ -60,15 +61,15 @@ def get_image_unit_vectors(latent_points, image_features, generator, inverter):
         img = PIL.Image.fromarray(np.uint8((array + 1.0) / 2.0 * 255), mode='L')
         return img
 
-    orth_vec =  svms['ave_brightness'].coef_
-    feature_unit = normalize(orth_vec)
+    #orth_vec =  svms['ave_brightness'].coef_
+    #feature_unit = normalize(orth_vec)
 
     # Generate walks along svm normal
-    img_0 = latent_points[0]
-    distances = np.arange(0.0, 16, 1.0)
-    imgs = [(img_0 + d*feature_unit) for d in distances]
+    #img_0 = latent_points[0]
+    #distances = np.arange(0.0, 16, 1.0)
+    #imgs = [(img_0 + d*feature_unit) for d in distances]
 
-    generate_and_save_images(generator, 0, imgs)
+    #generate_and_save_images(generator, 0, imgs)
     # Return unit vectors corresponding to image features
     return uncorrelate_norms({name: normalize(svm.coef_) for (name, svm) in svms.items()})
 
